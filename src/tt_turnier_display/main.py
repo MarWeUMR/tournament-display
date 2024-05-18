@@ -1,8 +1,18 @@
 import structlog
 import requests
 from bs4 import BeautifulSoup
+from fastapi import FastAPI
+from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
+from contextlib import asynccontextmanager
+import time
+import threading
 
 log = structlog.get_logger()
+app = FastAPI()
+
+# Global variable to store the table data
+table_data = []
 
 
 def fetch_data_from_url(url):
@@ -57,13 +67,56 @@ def extract_table_data(soup):
     return table_data
 
 
-if __name__ == "__main__":
+def update_table_data():
+    global table_data
     url = (
         "https://www.tvwallau.de/abteilungen/tischtennis/turnier2024/active_tables.html"
     )
     response = fetch_data_from_url(url)
     soup = BeautifulSoup(response.text, "html.parser")
     table_data = extract_table_data(soup)
+    log.info("Table data updated")
 
-    for row in table_data:
-        print(row)
+
+def periodic_update(interval: int):
+    while True:
+        update_table_data()
+        time.sleep(interval)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Start the background thread to update the table data periodically
+    interval = 60  # Update every 60 seconds
+    thread = threading.Thread(target=periodic_update, args=(interval,), daemon=True)
+    thread.start()
+    yield
+    # Cleanup code can be added here if needed
+
+
+app = FastAPI(lifespan=lifespan)
+
+
+@app.get("/")
+def read_root():
+    return {"message": "Welcome to the Table Tennis Tournament API"}
+
+
+@app.get("/table_data")
+def get_table_data():
+    return JSONResponse(content=table_data)
+
+
+# Allow CORS for frontend development
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins for development
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(app, host="0.0.0.0", port=8000)
